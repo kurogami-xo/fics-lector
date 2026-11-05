@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Fics">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Fics</title>
+<style>
+  :root {
+    --bg: #f6efe3; --card: #fffaf1; --ink: #2b2420; --muted: #7a6c60;
+    --line: #e2d6c4; --accent: #9c4a5a; --ok: #3f7a4a; --bad: #a33a2e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1d1a18; --card: #26221f; --ink: #eee4d6; --muted: #a8998a;
+            --line: #3a332d; --accent: #d98a9a; --ok: #7fbf8a; --bad: #e88a7e; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+  body { font: 16px/1.5 Georgia, "Hiragino Mincho ProN", serif; -webkit-text-size-adjust: 100%; }
+  main { max-width: 560px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 26px; margin: 4px 0 2px; color: var(--accent); }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 0 0 14px; }
+  h2 { font-size: 17px; margin: 0 0 8px; }
+  p { margin: 0 0 10px; }
+  label { display: block; font-size: 14px; color: var(--muted); margin: 8px 0 4px; }
+  input[type=password], textarea {
+    width: 100%; font: 16px/1.4 -apple-system, Helvetica, sans-serif; padding: 10px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink);
+    -webkit-appearance: none;
+  }
+  textarea { font: 12px/1.4 Menlo, monospace; height: 120px; }
+  button {
+    -webkit-appearance: none; font: 600 16px -apple-system, Helvetica, sans-serif;
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 11px 16px; margin-top: 12px; width: 100%;
+  }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  button[disabled] { opacity: .5; }
+  ul.checks { list-style: none; padding: 0; margin: 0; font: 14px/1.6 -apple-system, Helvetica, sans-serif; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+  .msg { font: 14px/1.4 -apple-system, Helvetica, sans-serif; margin-top: 10px; }
+  .reader { font-size: 18px; line-height: 1.7; }
+  .reader h3 { font-size: 20px; margin: 0 0 12px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Fics</h1>
+  <p class="sub">Prueba de la Fase 0 · biblioteca personal cifrada</p>
+
+  <section class="card">
+    <h2>Este dispositivo</h2>
+    <ul class="checks" id="checks"><li class="muted">Revisando…</li></ul>
+  </section>
+
+  <section class="card hidden" id="setup">
+    <h2>Crear tu llave</h2>
+    <p>Hazlo una sola vez, mejor desde la Mac. Elige una contraseña larga, como una frase, y guárdala en un lugar seguro. Si la olvidas, no hay forma de recuperarla.</p>
+    <label for="p1">Contraseña</label>
+    <input type="password" id="p1" autocomplete="new-password">
+    <label for="p2">Repítela</label>
+    <input type="password" id="p2" autocomplete="new-password">
+    <button id="btnCreate">Crear llave</button>
+    <div class="msg" id="setupMsg"></div>
+    <div class="hidden" id="keyOut">
+      <label for="keyText">Tu llave cifrada (no contiene tu contraseña)</label>
+      <textarea id="keyText" readonly></textarea>
+      <button class="ghost" id="btnCopy">Copiar</button>
+      <p class="msg">Pégala en el chat con Claude. Es segura de compartir: sin tu contraseña no sirve para nada.</p>
+    </div>
+  </section>
+
+  <section class="card hidden" id="unlock">
+    <h2>Abrir la biblioteca</h2>
+    <label for="pw">Contraseña</label>
+    <input type="password" id="pw" autocomplete="current-password">
+    <button id="btnUnlock">Abrir</button>
+    <div class="msg" id="unlockMsg"></div>
+  </section>
+
+  <section class="card hidden" id="readerCard">
+    <div class="reader" id="reader"></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
