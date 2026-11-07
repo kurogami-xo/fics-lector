@@ -112,12 +112,75 @@
       .then(function (aes) { return subtle.decrypt({ name: 'AES-GCM', iv: fromB64(file.iv) }, aes, fromB64(file.d)); })
       .then(function (plain) { return JSON.parse(dec.decode(plain)); });
   }
-  function load(path) {
-    if (state.cache[path]) return Promise.resolve(state.cache[path]);
-    return getJSON('data/' + path + '.enc').then(decryptDoc).then(function (doc) {
-      state.cache[path] = doc;
+  // rev = huella del contenido; va en la URL para que la caché offline nunca sirva una versión vieja.
+  function dataURL(path, rev) { return 'data/' + path + '.enc' + (rev ? '?r=' + rev : ''); }
+  function load(path, rev) {
+    var url = dataURL(path, rev);
+    if (state.cache[url]) return Promise.resolve(state.cache[url]);
+    return getJSON(url).then(function (file) {
+      return decryptDoc(file).catch(function (e) { e.decrypt = true; throw e; });
+    }).then(function (doc) {
+      state.cache[url] = doc;
       return doc;
     });
+  }
+
+  /* ---------- Sin conexión ---------- */
+  var DATA_CACHE = 'fics-data';
+  var sync = { state: 'idle', done: 0, total: 0 };
+  function allDataURLs() {
+    var urls = [];
+    state.lib.fics.forEach(function (f) {
+      f.chapters.forEach(function (c) { urls.push(dataURL(f.id + '/' + c.id, c.rev)); });
+      if (f.cover) urls.push(dataURL(f.id + '/' + f.cover, f.coverRev));
+      if (f.moodboard) urls.push(dataURL(f.id + '/' + f.moodboard, f.moodboardRev));
+    });
+    return urls;
+  }
+  function absolute(u) { return new URL(u, location.href).href; }
+  // Guarda en el iPod todo lo publicado (cifrado) y borra versiones viejas.
+  function syncOffline() {
+    if (!window.caches || !state.lib) { sync.state = 'unsupported'; showSync(); return; }
+    if (sync.state === 'running') return;
+    var urls = allDataURLs(), wanted = {};
+    urls.forEach(function (u) { wanted[absolute(u)] = true; });
+    wanted[absolute(dataURL('library'))] = true;
+    sync = { state: 'running', done: 0, total: urls.length };
+    showSync();
+    caches.open(DATA_CACHE).then(function (cache) {
+      var chain = Promise.resolve(), failed = 0;
+      urls.forEach(function (u) {
+        chain = chain.then(function () {
+          return cache.match(u).then(function (hit) {
+            if (!hit) return cache.add(u);
+          }).catch(function () { failed++; }).then(function () { sync.done++; showSync(); });
+        });
+      });
+      return chain.then(function () {
+        return cache.keys().then(function (reqs) {
+          return Promise.all(reqs.filter(function (r) { return !wanted[r.url]; })
+            .map(function (r) { return cache.delete(r); }));
+        });
+      }).then(function () {
+        sync.state = failed ? (navigator.onLine === false ? 'offline' : 'partial') : 'ready';
+        sync.failed = failed;
+        showSync();
+      });
+    }).catch(function () { sync.state = 'partial'; showSync(); });
+  }
+  function syncText() {
+    if (sync.state === 'running') return 'Guardando para leer sin conexión… ' + sync.done + '/' + sync.total;
+    if (sync.state === 'ready') return '✓ Todo disponible sin conexión';
+    if (sync.state === 'offline') return 'Sin conexión · ' + (sync.total - sync.failed) + ' de ' + sync.total + ' guardados';
+    if (sync.state === 'partial') return 'Faltan ' + sync.failed + ' archivos por guardar · toca para reintentar';
+    if (sync.state === 'unsupported') return 'Este navegador no permite modo sin conexión';
+    return '';
+  }
+  function showSync() {
+    var el = document.getElementById('sync');
+    if (!el) return;
+    el.textContent = syncText();
+    el.className = 'sync ' + sync.state;
   }
 
   /* ---------- Progreso de lectura ---------- */
@@ -171,7 +234,7 @@
     Array.prototype.forEach.call(nodes, function (node) {
       var fic = findFic(node.getAttribute('data-cover'));
       if (!fic || !fic.cover) return;
-      load(fic.id + '/' + fic.cover).then(function (doc) {
+      load(fic.id + '/' + fic.cover, fic.coverRev).then(function (doc) {
         var img = new Image();
         img.alt = '';
         img.src = doc.image;
@@ -229,8 +292,12 @@
       '<main><div class="shelf-head"><h2>Mi biblioteca</h2><span class="muted" style="font-size:13px">' +
       fics.length + (fics.length === 1 ? ' historia' : ' historias') + '</span></div>' +
       (fics.length ? '<div class="grid">' + books + '</div>' : '<div class="card empty muted">Aún no hay historias.</div>') +
-      '</main>');
+      '<div class="sync" id="sync"></div></main>');
     fillCovers(app);
+    showSync();
+    document.getElementById('sync').onclick = function () {
+      if (sync.state === 'partial' || sync.state === 'offline') syncOffline();
+    };
     document.getElementById('lock').onclick = function () {
       if (!confirmLock()) return;
       forgetKey().then(function () { state.pk = null; state.cache = {}; screenUnlock('Biblioteca cerrada.'); });
@@ -273,7 +340,7 @@
       '<ul class="toc">' + items + '</ul></main>');
     fillCovers(app);
     if (fic.moodboard) {
-      load(fic.id + '/' + fic.moodboard).then(function (doc) {
+      load(fic.id + '/' + fic.moodboard, fic.moodboardRev).then(function (doc) {
         var box = document.getElementById('mood');
         if (box) box.innerHTML = '<img alt="" src="' + doc.image + '">';
       }).catch(function () {});
@@ -297,7 +364,7 @@
       '</main><div class="progress" id="prog"></div>');
     document.getElementById('aa').onclick = toggleSheet;
 
-    load(fic.id + '/' + ch.id).then(function (doc) {
+    load(fic.id + '/' + ch.id, ch.rev).then(function (doc) {
       var art = document.getElementById('reader');
       if (!art) return;
       art.innerHTML = (t.kicker ? '<div class="chap-kicker">' + esc(t.kicker) + '</div>' : '') +
@@ -390,13 +457,21 @@
     return load('library').then(function (lib) {
       state.lib = lib;
       route();
+      syncOffline();
     }, function (err) {
-      if (err && err.status === 404) {
-        render(bar('', '<span class="brand">Fics</span>') + '<main><div class="card empty muted">La biblioteca aún no se ha publicado.</div></main>');
-      } else {
+      if (err && err.decrypt) {
+        // La llave guardada no abre la biblioteca (p. ej. llave nueva): pedir contraseña.
         forgetKey();
         state.pk = null;
         screenUnlock('No se pudo abrir la biblioteca. Vuelve a poner tu contraseña.');
+      } else if (err && err.status === 404) {
+        render(bar('', '<span class="brand">Fics</span>') + '<main><div class="card empty muted">La biblioteca aún no se ha publicado.</div></main>');
+      } else {
+        // Sin conexión y sin copia guardada: nunca borrar la llave por esto.
+        render(bar('', '<span class="brand">Fics</span>') + '<main><div class="card empty muted">' +
+          'Sin conexión, y esta biblioteca aún no se guardó en este dispositivo.<br>Ábrela una vez con internet.' +
+          '<button class="btn ghost" id="retry">Reintentar</button></div></main>');
+        document.getElementById('retry').onclick = openLibrary;
       }
     });
   }
