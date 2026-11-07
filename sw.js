@@ -5,7 +5,7 @@
    - Capítulos e imágenes (data/…/*.enc?r=<rev>): caché primero. La versión va en
      la URL, así que un capítulo editado es una URL nueva y nunca se lee viejo.
    Todo lo guardado sigue cifrado: la caché no contiene texto legible. */
-var SHELL = 'fics-shell-v2';
+var SHELL = 'fics-shell-v3';
 var DATA = 'fics-data';
 var SHELL_FILES = ['./', 'index.html', 'app.js', 'keys.json', 'icon-180.png'];
 

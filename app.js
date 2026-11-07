@@ -288,7 +288,9 @@
         '<div class="name">' + esc(f.title) + '</div>' +
         '<div class="sub">' + (unread ? '<span class="dot"></span>' + unread + ' sin leer' : f.chapters.length + ' partes') + '</div></a>';
     }).join('');
-    render(bar('', '<span class="brand">Fics</span>', '<button class="tool" id="lock" title="Cerrar">⏏</button>') +
+    flushOutbox();
+    render(bar('<a class="tool" href="#/ajustes" title="Ajustes" style="font-size:20px">⚙︎</a>', '<span class="brand">Fics</span>',
+      '<button class="tool" id="lock" title="Cerrar">⏏</button>') +
       '<main><div class="shelf-head"><h2>Mi biblioteca</h2><span class="muted" style="font-size:13px">' +
       fics.length + (fics.length === 1 ? ' historia' : ' historias') + '</span></div>' +
       (fics.length ? '<div class="grid">' + books + '</div>' : '<div class="card empty muted">Aún no hay historias.</div>') +
@@ -300,7 +302,7 @@
     };
     document.getElementById('lock').onclick = function () {
       if (!confirmLock()) return;
-      forgetKey().then(function () { state.pk = null; state.cache = {}; screenUnlock('Biblioteca cerrada.'); });
+      forgetKey().then(function () { state.pk = null; state.cache = {}; token = null; screenUnlock('Biblioteca cerrada.'); });
     };
   }
   function confirmLock() {
@@ -353,21 +355,30 @@
     var ch = fic.chapters[i];
     if (!ch) { location.hash = '#/f/' + fic.id; return; }
     var t = splitTitle(ch.title);
+    current = { fic: fic, ch: ch };
     render(bar('<a class="back" href="#/f/' + esc(fic.id) + '">‹</a>', esc(t.kicker || fic.title),
-      '<button class="tool" id="aa">Aa</button>') +
+      '<span class="tools"><a class="tool" href="#/f/' + esc(fic.id) + '/' + i + '/editar" title="Editar">✎</a>' +
+      '<button class="tool" id="aa">Aa</button></span>') +
       '<main><article class="reader" id="reader" style="font-size:' + SIZES[settings.size] + 'px">' +
       '<div class="muted" style="text-align:center;font-family:-apple-system,sans-serif">Abriendo…</div></article>' +
       '<div class="pager">' +
       (i > 0 ? '<a class="btn ghost" href="#/f/' + esc(fic.id) + '/' + (i - 1) + '">‹ Anterior</a>' : '') +
       (i < fic.chapters.length - 1 ? '<a class="btn" href="#/f/' + esc(fic.id) + '/' + (i + 1) + '">Siguiente ›</a>' : '') +
       '</div>' + (i === fic.chapters.length - 1 ? '<div class="end">Estás al día ✦</div>' : '') +
+      '<section class="comments" id="comments"></section>' +
       '</main><div class="progress" id="prog"></div>');
     document.getElementById('aa').onclick = toggleSheet;
+    renderComments();
+    fetchThread(fic, ch);
 
-    load(fic.id + '/' + ch.id, ch.rev).then(function (doc) {
+    var mine = localEdit(ch);
+    (mine ? Promise.resolve({ body: mine.body }) : load(fic.id + '/' + ch.id, ch.rev)).then(function (doc) {
       var art = document.getElementById('reader');
       if (!art) return;
-      art.innerHTML = (t.kicker ? '<div class="chap-kicker">' + esc(t.kicker) + '</div>' : '') +
+      art.innerHTML = (mine ? '<div class="banner">✎ Estás viendo tu edición. ' +
+          (mine.sent ? 'Ya le llegó a Claude' : 'Se enviará a Claude al tener conexión') +
+          '; cuando la integre al doc, este aviso desaparece.</div>' : '') +
+        (t.kicker ? '<div class="chap-kicker">' + esc(t.kicker) + '</div>' : '') +
         '<h2>' + esc(t.name) + '</h2>' + renderMarkdown(doc.body);
       var p = progress[ch.id];
       if (p && p.rev === ch.rev && p.pos > 0.02 && p.pos < 0.98) {
@@ -397,8 +408,226 @@
       }, 400);
     }
     window.addEventListener('scroll', onScroll);
-    detachReader = function () { window.removeEventListener('scroll', onScroll); hideSheet(); };
+    detachReader = function () { window.removeEventListener('scroll', onScroll); hideSheet(); current = null; };
     onScroll();
+  }
+
+  /* ---------- Buzón: comentarios y ediciones ----------
+     Se guardan como archivos en el repo PRIVADO (kurogami-xo/fics, carpeta buzon/),
+     usando una llave de GitHub limitada a ese repo. La llave se guarda cifrada con la
+     llave pública de la biblioteca: sin desbloquear la app, no se puede leer.
+     Todo pasa por una bandeja de salida: sin conexión se guarda y se envía después. */
+  var REPO = 'kurogami-xo/fics';
+  var API = 'https://api.github.com/repos/' + REPO + '/contents/';
+  var token = null;
+  var current = null;
+  var outbox = store('outbox') || [];
+
+  function utf8ToB64(s) { return btoa(unescape(encodeURIComponent(s))); }
+  function b64ToUtf8(s) { return decodeURIComponent(escape(atob(s.replace(/\s/g, '')))); }
+  function saveToken(t) {
+    return subtle.importKey('spki', fromB64(state.keys.publicKey), { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt'])
+      .then(function (pub) { return subtle.encrypt({ name: 'RSA-OAEP' }, pub, enc.encode(t)); })
+      .then(function (c) { store('tok', toB64(c)); token = t; });
+  }
+  function hasToken() { return !!store('tok'); }
+  function getToken() {
+    if (token) return Promise.resolve(token);
+    var c = store('tok');
+    if (!c || !state.pk) return Promise.resolve(null);
+    return subtle.decrypt({ name: 'RSA-OAEP' }, state.pk, fromB64(c))
+      .then(function (p) { token = dec.decode(p); return token; }, function () { return null; });
+  }
+  function gh(method, path, body) {
+    return getToken().then(function (t) {
+      if (!t) { var e = new Error('sin llave'); e.noToken = true; throw e; }
+      return fetch(API + path.split('/').map(encodeURIComponent).join('/'), {
+        method: method, cache: 'no-store',
+        headers: { 'Authorization': 'token ' + t, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined
+      }).then(function (r) {
+        if (r.status === 404 && method === 'GET') return null;
+        if (!r.ok) { var e = new Error('GitHub ' + r.status); e.status = r.status; throw e; }
+        return r.json();
+      });
+    });
+  }
+  function base(fic, ch) { return 'buzon/' + fic.slug + '/' + ch.src.replace(/\.md$/, ''); }
+  function threadPath(fic, ch) { return base(fic, ch) + '-comentarios.json'; }
+  function saveOutbox() { store('outbox', outbox); }
+
+  function sendOp(op) {
+    if (op.type === 'edit') {
+      return gh('PUT', op.path, { message: 'Edición desde el iPod: ' + op.title, content: utf8ToB64(op.text) });
+    }
+    function attempt(n) {
+      return gh('GET', op.path).then(function (file) {
+        var thread = file ? JSON.parse(b64ToUtf8(file.content)) :
+          { fic: op.ficTitle, chapter: op.title, src: op.src, comments: [] };
+        if (thread.comments.some(function (c) { return c.id === op.comment.id; })) return thread;
+        thread.comments.push(op.comment);
+        var put = { message: 'Comentario desde el iPod: ' + op.title, content: utf8ToB64(JSON.stringify(thread, null, 2)) };
+        if (file) put.sha = file.sha;
+        return gh('PUT', op.path, put).then(function () { return thread; });
+      }).catch(function (e) {
+        if (n > 0 && (e.status === 409 || e.status === 422)) return attempt(n - 1);
+        throw e;
+      });
+    }
+    return attempt(2);
+  }
+  var flushing = null;
+  function flushOutbox() {
+    if (flushing) return flushing;
+    if (!outbox.length || !hasToken() || navigator.onLine === false) return Promise.resolve();
+    var chain = Promise.resolve();
+    outbox.slice().forEach(function (op) {
+      chain = chain.then(function () {
+        return sendOp(op).then(function (thread) {
+          outbox = outbox.filter(function (o) { return o.id !== op.id; });
+          saveOutbox();
+          if (op.type === 'comment') store('thread:' + op.chId, thread.comments);
+          if (op.type === 'edit') { var e = store('edit:' + op.chId); if (e) { e.sent = true; store('edit:' + op.chId, e); } }
+        });
+      });
+    });
+    flushing = chain.catch(function () {}).then(function () { flushing = null; renderComments(); });
+    return flushing;
+  }
+  window.addEventListener('online', function () { flushOutbox(); });
+
+  function fetchThread(fic, ch) {
+    if (!hasToken() || navigator.onLine === false) return;
+    gh('GET', threadPath(fic, ch)).then(function (file) {
+      store('thread:' + ch.id, file ? JSON.parse(b64ToUtf8(file.content)).comments : []);
+      if (current && current.ch.id === ch.id) renderComments();
+    }).catch(function () {});
+  }
+  function fmtDate(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.getDate() + '/' + (d.getMonth() + 1) + ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+  function renderComments() {
+    var box = document.getElementById('comments');
+    if (!box || !current) return;
+    var fic = current.fic, ch = current.ch;
+    var list = (store('thread:' + ch.id) || []).slice(), seen = {};
+    list.forEach(function (c) { seen[c.id] = true; });
+    outbox.forEach(function (o) {
+      if (o.type === 'comment' && o.chId === ch.id && !seen[o.comment.id]) list.push(Object.assign({ pending: true }, o.comment));
+    });
+    var items = list.map(function (c) {
+      var mine = c.who !== 'claude';
+      return '<li class="cm ' + (mine ? 'me' : 'claude') + '"><div class="who">' + (mine ? 'Tú' : 'Claude') + ' · ' + fmtDate(c.at) +
+        (c.pending ? ' · <span class="pend">por enviar</span>' : '') + '</div>' +
+        '<div class="txt">' + c.text.split('\n').map(inline).join('<br>') + '</div></li>';
+    }).join('');
+    var draft = document.getElementById('cmText');
+    var keep = draft ? draft.value : '';
+    box.innerHTML = '<h3>Comentarios' + (list.length ? ' <span class="muted">' + list.length + '</span>' : '') + '</h3>' +
+      (items ? '<ul class="cms">' + items + '</ul>' :
+        '<p class="muted">Déjale una nota a Claude sobre este capítulo: ideas, cambios, lo que quieras.</p>') +
+      (hasToken() ? '<textarea id="cmText" placeholder="Escribe un comentario…"></textarea><button class="btn" id="cmSend">Comentar</button>' :
+        '<a class="btn ghost" href="#/ajustes">Conectar para comentar</a>');
+    var ta = document.getElementById('cmText');
+    if (ta) ta.value = keep;
+    var send = document.getElementById('cmSend');
+    if (send) send.onclick = function () {
+      var text = document.getElementById('cmText').value.trim();
+      if (!text) return;
+      var c = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), who: 'jiji', text: text, at: new Date().toISOString() };
+      outbox.push({ id: 'op-' + c.id, type: 'comment', chId: ch.id, path: threadPath(fic, ch), title: ch.title,
+        ficTitle: fic.title, src: fic.slug + '/' + ch.src, comment: c });
+      saveOutbox();
+      document.getElementById('cmText').value = '';
+      renderComments();
+      flushOutbox();
+    };
+  }
+
+  /* ---------- Ediciones locales ---------- */
+  // Tu edición se ve al instante en este dispositivo. Cuando Claude la integra y
+  // republica, el capítulo cambia de versión y la copia local se descarta sola.
+  function localEdit(ch) {
+    var e = store('edit:' + ch.id);
+    if (e && e.base !== ch.rev) { try { localStorage.removeItem('fics:edit:' + ch.id); } catch (x) {} return null; }
+    return e;
+  }
+  function screenEditor(fic, i) {
+    var ch = fic.chapters[i];
+    if (!ch) { location.hash = '#/f/' + fic.id; return; }
+    var t = splitTitle(ch.title);
+    render(bar('<a class="back" href="#/f/' + esc(fic.id) + '/' + i + '">‹</a>', 'Editar · ' + esc(t.kicker || t.name),
+      '<button class="tool" id="save">Guardar</button>') +
+      '<main class="editor"><p class="muted hint" id="emsg">Cargando…</p><textarea id="body" class="hidden"></textarea></main>');
+    var mine = localEdit(ch);
+    (mine ? Promise.resolve({ body: mine.body }) : load(fic.id + '/' + ch.id, ch.rev)).then(function (doc) {
+      var ta = document.getElementById('body');
+      if (!ta) return;
+      ta.value = doc.body;
+      ta.classList.remove('hidden');
+      document.getElementById('emsg').innerHTML = 'Usa *cursiva*, **negrita** y --- para cambio de escena. ' +
+        'Tu edición se ve al instante aquí y Claude la integra al doc.' +
+        (hasToken() ? '' : ' <a href="#/ajustes" style="color:var(--accent)">Conecta la app</a> para que le llegue.');
+    });
+    document.getElementById('save').onclick = function () {
+      var ta = document.getElementById('body');
+      if (!ta || ta.classList.contains('hidden')) return;
+      var stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      store('edit:' + ch.id, { base: ch.rev, body: ta.value, at: new Date().toISOString(), sent: false });
+      outbox = outbox.filter(function (o) { return !(o.type === 'edit' && o.chId === ch.id); });
+      outbox.push({ id: 'op-e' + Date.now().toString(36), type: 'edit', chId: ch.id, title: ch.title,
+        path: base(fic, ch) + '-edicion-' + stamp + '.md', text: '# ' + ch.title + '\n\n' + ta.value.replace(/\s+$/, '') + '\n' });
+      saveOutbox();
+      flushOutbox();
+      location.hash = '#/f/' + fic.id + '/' + i;
+    };
+  }
+
+  /* ---------- Pantalla: ajustes ---------- */
+  function screenSettings() {
+    var has = hasToken();
+    render(bar('<a class="back" href="#/">‹</a>', 'Ajustes') +
+      '<main><div class="card"><h2 class="h">Conexión con Claude</h2>' +
+      '<p class="muted" style="margin:0">Para comentar y editar desde aquí. Pega la llave de GitHub limitada al repo privado <b>fics</b>. Se guarda cifrada.</p>' +
+      (has ? '<p class="ok" style="margin:10px 0 0">✓ Conectada</p>' : '') +
+      '<label for="tk">' + (has ? 'Cambiar llave' : 'Llave de GitHub') + '</label>' +
+      '<input type="password" id="tk" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…">' +
+      '<button class="btn" id="tkSave">' + (has ? 'Cambiar' : 'Conectar') + '</button>' +
+      (has ? '<button class="btn ghost" id="tkDel">Quitar llave de este dispositivo</button>' : '') +
+      '<div class="msg" id="tkMsg"></div></div>' +
+      '<div class="card"><h2 class="h">Por enviar</h2><p class="muted" id="obx" style="margin:0"></p>' +
+      '<button class="btn ghost" id="flush">Enviar ahora</button></div></main>');
+    function showObx() {
+      var el = document.getElementById('obx');
+      if (el) el.textContent = outbox.length ? outbox.length + ' pendiente(s). Se envían solos cuando hay conexión.' : 'Nada pendiente.';
+    }
+    showObx();
+    document.getElementById('flush').onclick = function () { flushOutbox().then(showObx); };
+    document.getElementById('tkSave').onclick = function () {
+      var v = document.getElementById('tk').value.trim(), msg = document.getElementById('tkMsg');
+      if (!v) return;
+      msg.className = 'msg muted'; msg.textContent = 'Probando…';
+      fetch('https://api.github.com/repos/' + REPO, { cache: 'no-store',
+        headers: { 'Authorization': 'token ' + v, 'Accept': 'application/vnd.github.v3+json' } })
+        .then(function (r) { if (!r.ok) throw new Error('GitHub ' + r.status); return saveToken(v); })
+        .then(function () {
+          screenSettings();
+          var m = document.getElementById('tkMsg');
+          if (m) { m.className = 'msg ok'; m.textContent = '✓ Listo. Ya puedes comentar y editar.'; }
+          flushOutbox().then(showObx);
+        }, function (e) {
+          msg.className = 'msg bad';
+          msg.textContent = 'No funcionó (' + (e.message || e) + '). Revisa que la llave tenga acceso a "fics" con Contents: Read and write.';
+        });
+    };
+    var del = document.getElementById('tkDel');
+    if (del) del.onclick = function () {
+      try { localStorage.removeItem('fics:tok'); } catch (e) {}
+      token = null;
+      screenSettings();
+    };
   }
 
   /* ---------- Panel Aa ---------- */
@@ -442,11 +671,14 @@
     if (detachReader) { detachReader(); detachReader = null; }
     if (!state.lib) return;
     var parts = location.hash.replace(/^#\/?/, '').split('/');
+    if (parts[0] === 'ajustes') { screenSettings(); return; }
     if (parts[0] === 'f' && parts[1]) {
       var fic = findFic(parts[1]);
       if (!fic) { location.hash = '#/'; return; }
-      if (parts[2] != null && parts[2] !== '') screenReader(fic, Number(parts[2]));
-      else screenFic(fic);
+      if (parts[2] != null && parts[2] !== '') {
+        if (parts[3] === 'editar') screenEditor(fic, Number(parts[2]));
+        else screenReader(fic, Number(parts[2]));
+      } else screenFic(fic);
       return;
     }
     screenLibrary();
