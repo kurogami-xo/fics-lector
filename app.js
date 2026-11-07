@@ -212,7 +212,8 @@
     return text.split(/\n\s*\n/).map(function (block) {
       var b = block.trim();
       if (!b) return '';
-      if (/^(-{3,}|\*{3,}|_{3,})$/.test(b)) return '<hr>';
+      // Cambio de escena: ---, ***, ___ y también lo que deja el teclado de iOS (—-, —, ——).
+      if (/^[-—–_*~·•✦\s]+$/.test(b) && (b.replace(/\s/g, '').length >= 2 || /[—✦]/.test(b))) return '<hr>';
       var h = /^(#{1,6})\s+(.*)$/.exec(b);
       if (h) return '<h' + (h[1].length < 3 ? 3 : 4) + '>' + inline(h[2]) + '</h' + (h[1].length < 3 ? 3 : 4) + '>';
       return '<p>' + b.split('\n').map(inline).join('<br>') + '</p>';
@@ -320,7 +321,7 @@
   function screenFic(fic) {
     var firstUnread = null, resume = null;
     var items = fic.chapters.map(function (c, i) {
-      var st = chapState(c), t = splitTitle(c.title);
+      var st = chapState(c), t = splitTitle(titleOf(c));
       if (firstUnread === null && (st === 'new' || st === 'updated')) firstUnread = i;
       if (st === 'started') resume = i;
       var flag = st === 'new' ? '<span class="flag">Nuevo</span>' : st === 'updated' ? '<span class="flag">Editado</span>' : '';
@@ -355,7 +356,8 @@
   function screenReader(fic, i) {
     var ch = fic.chapters[i];
     if (!ch) { location.hash = '#/f/' + fic.id; return; }
-    var t = splitTitle(ch.title);
+    var mine = localEdit(ch);
+    var t = splitTitle(titleOf(ch));
     current = { fic: fic, ch: ch };
     render(bar('<a class="back" href="#/f/' + esc(fic.id) + '">‹</a>', esc(t.kicker || fic.title),
       '<span class="tools"><a class="tool" href="#/f/' + esc(fic.id) + '/' + i + '/editar" title="Editar">✎</a>' +
@@ -372,15 +374,20 @@
     renderComments();
     fetchThread(fic, ch);
 
-    var mine = localEdit(ch);
     (mine ? Promise.resolve({ body: mine.body }) : load(fic.id + '/' + ch.id, ch.rev)).then(function (doc) {
       var art = document.getElementById('reader');
       if (!art) return;
       art.innerHTML = (mine ? '<div class="banner">✎ Estás viendo tu edición. ' +
           (mine.sent ? 'Ya le llegó a Claude' : 'Se enviará a Claude al tener conexión') +
-          '; cuando la integre al doc, este aviso desaparece.</div>' : '') +
+          '; cuando la integre al doc, este aviso desaparece. <a href="#" id="discard">Descartar mi edición</a></div>' : '') +
         (t.kicker ? '<div class="chap-kicker">' + esc(t.kicker) + '</div>' : '') +
         '<h2>' + esc(t.name) + '</h2>' + renderMarkdown(doc.body);
+      var dis = document.getElementById('discard');
+      if (dis) dis.onclick = function (e) {
+        e.preventDefault();
+        if (dis.getAttribute('data-armed')) { discardEdit(ch); screenReader(fic, i); return; }
+        dis.setAttribute('data-armed', '1'); dis.textContent = 'Toca otra vez para descartar';
+      };
       var p = progress[ch.id];
       if (p && p.rev === ch.rev && p.pos > 0.02 && p.pos < 0.98) {
         setTimeout(function () { window.scrollTo(0, p.pos * maxScroll()); }, 0);
@@ -555,31 +562,54 @@
     if (e && e.base !== ch.rev) { try { localStorage.removeItem('fics:edit:' + ch.id); } catch (x) {} return null; }
     return e;
   }
+  function titleOf(ch) { var e = localEdit(ch); return (e && e.title) || ch.title; }
+  function discardEdit(ch) {
+    try { localStorage.removeItem('fics:edit:' + ch.id); } catch (x) {}
+    outbox = outbox.filter(function (o) { return !(o.type === 'edit' && o.chId === ch.id); });
+    saveOutbox();
+  }
+  function insertAtCursor(ta, text) {
+    var a = ta.selectionStart, b = ta.selectionEnd, v = ta.value;
+    ta.value = v.slice(0, a) + text + v.slice(b);
+    ta.selectionStart = ta.selectionEnd = a + text.length;
+    ta.focus();
+  }
   function screenEditor(fic, i) {
     var ch = fic.chapters[i];
     if (!ch) { location.hash = '#/f/' + fic.id; return; }
-    var t = splitTitle(ch.title);
+    var t = splitTitle(titleOf(ch));
     render(bar('<a class="back" href="#/f/' + esc(fic.id) + '/' + i + '">‹</a>', 'Editar · ' + esc(t.kicker || t.name),
       '<button class="tool" id="save">Guardar</button>') +
-      '<main class="editor"><p class="muted hint" id="emsg">Cargando…</p><textarea id="body" class="hidden"></textarea></main>');
+      '<main class="editor"><label for="ttl">Título' + (t.kicker ? ' · ' + esc(t.kicker) : '') + '</label>' +
+      '<input type="text" id="ttl" class="field" value="' + esc(t.name) + '">' +
+      '<div class="edtools"><button class="chipbtn" id="scene">✦ Escena</button><button class="chipbtn" id="ital"><i>cursiva</i></button></div>' +
+      '<p class="muted hint" id="emsg">Cargando…</p><textarea id="body" class="hidden"></textarea></main>');
     var mine = localEdit(ch);
     (mine ? Promise.resolve({ body: mine.body }) : load(fic.id + '/' + ch.id, ch.rev)).then(function (doc) {
       var ta = document.getElementById('body');
       if (!ta) return;
       ta.value = doc.body;
       ta.classList.remove('hidden');
-      document.getElementById('emsg').innerHTML = 'Usa *cursiva*, **negrita** y --- para cambio de escena. ' +
+      document.getElementById('emsg').innerHTML = 'Selecciona texto y toca <i>cursiva</i>, o escribe *así*. ' +
         'Tu edición se ve al instante aquí y Claude la integra al doc.' +
         (hasToken() ? '' : ' <a href="#/ajustes" style="color:var(--accent)">Conecta la app</a> para que le llegue.');
     });
+    document.getElementById('scene').onclick = function () { insertAtCursor(document.getElementById('body'), '\n\n---\n\n'); };
+    document.getElementById('ital').onclick = function () {
+      var ta = document.getElementById('body'), a = ta.selectionStart, b = ta.selectionEnd;
+      insertAtCursor(ta, '*' + ta.value.slice(a, b) + '*');
+      if (a === b) ta.selectionStart = ta.selectionEnd = a + 1;
+    };
     document.getElementById('save').onclick = function () {
       var ta = document.getElementById('body');
       if (!ta || ta.classList.contains('hidden')) return;
+      var name = document.getElementById('ttl').value.trim() || t.name;
+      var fullTitle = t.kicker ? t.kicker + ' — ' + name : name;
       var stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      store('edit:' + ch.id, { base: ch.rev, body: ta.value, at: new Date().toISOString(), sent: false });
+      store('edit:' + ch.id, { base: ch.rev, title: fullTitle, body: ta.value, at: new Date().toISOString(), sent: false });
       outbox = outbox.filter(function (o) { return !(o.type === 'edit' && o.chId === ch.id); });
       outbox.push({ id: 'op-e' + Date.now().toString(36), type: 'edit', chId: ch.id, title: ch.title,
-        path: base(fic, ch) + '-edicion-' + stamp + '.md', text: '# ' + ch.title + '\n\n' + ta.value.replace(/\s+$/, '') + '\n' });
+        path: base(fic, ch) + '-edicion-' + stamp + '.md', text: '# ' + fullTitle + '\n\n' + ta.value.replace(/\s+$/, '') + '\n' });
       saveOutbox();
       flushOutbox();
       location.hash = '#/f/' + fic.id + '/' + i;
