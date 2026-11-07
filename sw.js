@@ -5,9 +5,9 @@
    - Capítulos e imágenes (data/…/*.enc?r=<rev>): caché primero. La versión va en
      la URL, así que un capítulo editado es una URL nueva y nunca se lee viejo.
    Todo lo guardado sigue cifrado: la caché no contiene texto legible. */
-var SHELL = 'fics-shell-v3';
+var SHELL = 'fics-shell-v4';
 var DATA = 'fics-data';
-var SHELL_FILES = ['./', 'index.html', 'app.js', 'keys.json', 'icon-180.png'];
+var SHELL_FILES = ['./', 'index.html', 'app.js?v=4', 'keys.json', 'icon-180.png'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(SHELL).then(function (c) { return c.addAll(SHELL_FILES); }).then(function () {
@@ -22,8 +22,14 @@ self.addEventListener('activate', function (e) {
   }).then(function () { return self.clients.claim(); }));
 });
 
+// Siempre pide al servidor la versión actual (sin caché HTTP), para que las
+// actualizaciones de la app lleguen al iPod en cuanto se publican.
+function fresh(req) {
+  try { return fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }); }
+  catch (e) { return fetch(req); }
+}
 function networkFirst(req, cacheName) {
-  return fetch(req).then(function (res) {
+  return fresh(req).then(function (res) {
     if (res && res.ok) {
       var copy = res.clone();
       caches.open(cacheName).then(function (c) { c.put(req, copy); });
