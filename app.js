@@ -15,6 +15,7 @@
   var enc = new TextEncoder();
   var dec = new TextDecoder();
   var app = document.getElementById('app');
+  var APP_VERSION = 7;  // subir junto con version.json, index.html y sw.js (ver bump.mjs)
 
   var state = { keys: null, pk: null, lib: null, cache: {} };
 
@@ -744,7 +745,45 @@
     render('<main><div class="card bad">' + esc(text) + '</div></main>');
   }
   if (!subtle) { fatal('Este navegador no tiene cifrado disponible. Abre la app desde Safari.'); return; }
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js?v=' + APP_VERSION).catch(function () {});
+
+  /* ---------- Actualizaciones ----------
+     En iOS 12 la app de pantalla de inicio se queda con la versión guardada. Por eso la
+     app pregunta al servidor (sin caché) si hay una versión nueva al abrir y al volver a
+     ella, y si la hay borra la copia vieja y recarga. Sin conexión no hace nada. */
+  var updating = false;
+  function checkUpdate() {
+    if (updating || navigator.onLine === false) return;
+    fetch('version.json?t=' + Date.now(), { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (info) {
+        if (!info || !(info.v > APP_VERSION)) return;
+        if (/\/editar$/.test(location.hash)) { showUpdateToast(info.v); return; }  // no interrumpir una edición
+        applyUpdate(info.v);
+      }).catch(function () {});
+  }
+  function applyUpdate(v) {
+    updating = true;
+    var done = function () { location.replace(location.pathname + '?v=' + v + location.hash); };
+    var jobs = [];
+    if (window.caches) jobs.push(caches.keys().then(function (names) {
+      return Promise.all(names.filter(function (n) { return n.indexOf('fics-shell-') === 0; }).map(function (n) { return caches.delete(n); }));
+    }));
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) jobs.push(navigator.serviceWorker.getRegistrations().then(function (regs) {
+      return Promise.all(regs.map(function (r) { return r.unregister(); }));
+    }));
+    Promise.all(jobs).then(done, done);
+  }
+  function showUpdateToast(v) {
+    if (document.getElementById('upd')) return;
+    var d = document.createElement('div');
+    d.id = 'upd'; d.className = 'toast';
+    d.innerHTML = 'Hay una versión nueva de la app. <b>Actualizar</b> (guarda tu edición antes)';
+    d.onclick = function () { applyUpdate(v); };
+    document.body.appendChild(d);
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) checkUpdate(); });
+  window.addEventListener('pageshow', function () { checkUpdate(); });
+  setTimeout(checkUpdate, 1500);
 
   getJSON('keys.json').then(function (keys) {
     state.keys = keys;

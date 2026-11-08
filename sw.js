@@ -5,9 +5,9 @@
    - Capítulos e imágenes (data/…/*.enc?r=<rev>): caché primero. La versión va en
      la URL, así que un capítulo editado es una URL nueva y nunca se lee viejo.
    Todo lo guardado sigue cifrado: la caché no contiene texto legible. */
-var SHELL = 'fics-shell-v6';
+var SHELL = 'fics-shell-v7';
 var DATA = 'fics-data';
-var SHELL_FILES = ['./', 'index.html', 'app.js?v=5', 'keys.json', 'icon-180.png?v=2'];
+var SHELL_FILES = ['./', 'index.html', 'app.js?v=7', 'keys.json', 'icon-180.png?v=2'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(SHELL).then(function (c) { return c.addAll(SHELL_FILES); }).then(function () {
@@ -24,9 +24,11 @@ self.addEventListener('activate', function (e) {
 
 // Siempre pide al servidor la versión actual (sin caché HTTP), para que las
 // actualizaciones de la app lleguen al iPod en cuanto se publican.
+// Safari 12 no respeta del todo las opciones de caché de fetch: se agrega un parámetro
+// único a la URL para obligar a traer la versión del servidor.
 function fresh(req) {
-  try { return fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }); }
-  catch (e) { return fetch(req); }
+  var u = req.url + (req.url.indexOf('?') < 0 ? '?' : '&') + '_=' + Date.now();
+  return fetch(u, { credentials: 'same-origin' });
 }
 function networkFirst(req, cacheName) {
   return fresh(req).then(function (res) {

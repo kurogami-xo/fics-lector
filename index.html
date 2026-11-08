@@ -154,6 +154,8 @@
   .editor textarea { min-height: 72vh; font: 16px/1.65 Georgia, serif; }
   h2.h { margin: 0 0 6px; font: 700 18px Georgia, serif; }
 
+  .toast { position: fixed; left: 12px; right: 12px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 20; background: var(--ink); color: var(--bg); border-radius: 10px; padding: 12px 14px; font-size: 14px; box-shadow: 0 4px 16px var(--shadow); }
+
   /* Panel de ajustes de lectura */
   .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--card); border-top: 1px solid var(--line); padding: 14px 16px calc(18px + env(safe-area-inset-bottom)); box-shadow: 0 -4px 16px var(--shadow); }
   .sheet .row { display: flex; align-items: center; margin-bottom: 12px; }
@@ -167,6 +169,6 @@
 </head>
 <body>
 <div id="app"><main><div class="card muted">Cargando…</div></main></div>
-<script src="app.js?v=5"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>
