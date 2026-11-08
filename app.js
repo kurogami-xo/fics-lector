@@ -15,7 +15,7 @@
   var enc = new TextEncoder();
   var dec = new TextDecoder();
   var app = document.getElementById('app');
-  var APP_VERSION = 7;  // subir junto con version.json, index.html y sw.js (ver bump.mjs)
+  var APP_VERSION = 8;  // subir junto con version.json, index.html y sw.js (ver bump.mjs)
 
   var state = { keys: null, pk: null, lib: null, cache: {} };
 
@@ -217,7 +217,17 @@
       if (/^[-—–_*~·•✦\s]+$/.test(b) && (b.replace(/\s/g, '').length >= 2 || /[—✦]/.test(b))) return '<hr>';
       var h = /^(#{1,6})\s+(.*)$/.exec(b);
       if (h) return '<h' + (h[1].length < 3 ? 3 : 4) + '>' + inline(h[2]) + '</h' + (h[1].length < 3 ? 3 : 4) + '>';
-      return '<p>' + b.split('\n').map(inline).join('<br>') + '</p>';
+      // Listas y casillas (notas de planificación): - • · 1. · - [ ] ☐ · - [x] ☑
+      var lines = b.split('\n');
+      if (lines.every(function (l) { return /^\s*([-*]|\d+[.)])\s+/.test(l) || /^\s{2,}\S/.test(l); })) {
+        return '<ul class="md-list">' + lines.map(function (l) {
+          var m = /^(\s*)([-*]|\d+[.)])\s+(\[( |x|X)\]\s+)?(.*)$/.exec(l);
+          if (!m) return '<li class="cont">' + inline(l.trim()) + '</li>';
+          var mark = m[3] ? (m[4] === ' ' ? '☐' : '☑') : (/\d/.test(m[2]) ? m[2] : '•');
+          return '<li' + (m[1].length >= 2 ? ' class="sub"' : '') + '><span class="mk">' + mark + '</span>' + inline(m[5]) + '</li>';
+        }).join('') + '</ul>';
+      }
+      return '<p>' + lines.map(inline).join('<br>') + '</p>';
     }).join('');
   }
 
