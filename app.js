@@ -15,7 +15,7 @@
   var enc = new TextEncoder();
   var dec = new TextDecoder();
   var app = document.getElementById('app');
-  var APP_VERSION = 8;  // subir junto con version.json, index.html y sw.js (ver bump.mjs)
+  var APP_VERSION = 9;  // subir junto con version.json, index.html y sw.js (ver bump.mjs)
 
   var state = { keys: null, pk: null, lib: null, cache: {} };
 
@@ -204,10 +204,12 @@
 
   /* ---------- Markdown mínimo ---------- */
   function inline(s) {
-    return esc(s)
+    // \* y \_ escapados = asterisco/guion bajo literal, no cursiva
+    return esc(s).replace(/\\\*/g, '\u0001').replace(/\\_/g, '\u0002')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^*])\*(?!\s)(.+?)\*(?!\*)/g, '$1<em>$2</em>')
-      .replace(/(^|\W)_(?!\s)(.+?)_(?=\W|$)/g, '$1<em>$2</em>');
+      .replace(/(^|\W)_(?!\s)(.+?)_(?=\W|$)/g, '$1<em>$2</em>')
+      .replace(/\u0001/g, '*').replace(/\u0002/g, '_');
   }
   function renderMarkdown(text) {
     return text.split(/\n\s*\n/).map(function (block) {
